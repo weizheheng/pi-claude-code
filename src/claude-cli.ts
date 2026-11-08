@@ -885,8 +885,31 @@ export function rewriteInitialRequest(
     normalizeLeadingSystemCache(payload.system);
   }
   if (initialSystemMessages?.length || nativeSystemInjections) setReplayCacheBreakpoints(messages!);
+  if (messages) capCacheBreakpoints(payload.system, (payload as { tools?: unknown }).tools, messages);
 
   return Buffer.from(JSON.stringify(payload));
+}
+
+/**
+ * Anthropic accepts at most four cache_control markers per request. Claude Code's own request can already carry four
+ * (system prompt, tool list, latest query), and after a system update the replay adds more: the restored initial
+ * system message keeps its marker, and the update injected after the latest query becomes the final message and is
+ * marked as well. Keep the system prompt's and the tool list's markers (the stable prefix) and the newest message
+ * markers, and drop the oldest message markers beyond the limit.
+ */
+function capCacheBreakpoints(system: unknown, tools: unknown, messages: NativeRequestMessage[], limit = 4): void {
+  const marked = (blocks: unknown): Record<string, unknown>[] =>
+    Array.isArray(blocks)
+      ? blocks.filter((block): block is Record<string, unknown> => !!block && typeof block === "object" && "cache_control" in block)
+      : [];
+  const prefixMarkers = marked(system).length + marked(tools).length;
+  const messageMarkers = messages.flatMap((message) => marked(message.content));
+  let excess = prefixMarkers + messageMarkers.length - limit;
+  for (const block of messageMarkers) {
+    if (excess <= 0) break;
+    delete block.cache_control;
+    excess -= 1;
+  }
 }
 
 const CLAUDE_PROCESS_MAX_AGE_MS = 5 * 60 * 1_000;

@@ -329,6 +329,54 @@ test("keeps one breakpoint in a pre-marked multi-block final message (issue #10)
   assert.deepEqual(final.at(-1)?.cache_control, marker);
 });
 
+test("stays within four breakpoints when a system update trails the latest query", () => {
+  // Shape measured on Claude Code 2.1.312 for the first turn after Pi changed the system prompt: Claude Code marks
+  // the system prompt, the tool list and the latest query (four markers), Pi's restored environment message keeps its
+  // marker, and the update is injected after the latest query, where it becomes the final message and is marked too.
+  // The one-breakpoint-per-message fix (#10) does not cover this: the markers are in different messages.
+  const marker = { type: "ephemeral", ttl: "1h" };
+  const body = {
+    system: [
+      { type: "text", text: "billing" },
+      { type: "text", text: "identity", cache_control: marker },
+      { type: "text", text: "prompt", cache_control: marker },
+    ],
+    tools: [{ name: "mcp__pi__bash", input_schema: { type: "object" }, cache_control: marker }],
+    messages: [
+      { role: "user", content: [{ type: "text", text: "first" }] },
+      { role: "system", content: "environment" },
+      { role: "assistant", content: [{ type: "text", text: "ok" }] },
+      { role: "user", content: [{ type: "text", text: "second", cache_control: marker }] },
+    ],
+  };
+  const rewritten = JSON.parse(
+    rewriteInitialRequest(
+      Buffer.from(JSON.stringify(body)),
+      framesFor(body.messages),
+      [{ role: "system", content: [{ type: "text", text: "environment", cache_control: marker }] }],
+      [{ beforeAssistant: null, content: [{ type: "text", text: "<system_update>Instruction version 2</system_update>" }] }],
+    ).toString("utf8"),
+  );
+  const markers: string[] = [];
+  const scan = (where: string, blocks: unknown) => {
+    if (Array.isArray(blocks)) {
+      blocks.forEach((block, i) => {
+        if (block && typeof block === "object" && "cache_control" in block) markers.push(`${where}[${i}]`);
+      });
+    }
+  };
+  scan("system", rewritten.system);
+  scan("tools", rewritten.tools);
+  (rewritten.messages as WireMessage[]).forEach((message, i) => scan(`messages[${i}]`, message.content));
+  assert.ok(markers.length <= 4, `found ${markers.length} cache_control markers: ${markers.join(", ")}`);
+  // The stable prefix and the newest message keep their breakpoints.
+  assert.ok(markers.includes("tools[0]"), "the tool list keeps its breakpoint");
+  assert.ok(markers.some((m) => m.startsWith("system[")), "the system prompt keeps a breakpoint");
+  const last = rewritten.messages.length - 1;
+  assert.equal(rewritten.messages[last].role, "system");
+  assert.ok(markers.includes(`messages[${last}][0]`), "the trailing update is the newest breakpoint");
+});
+
 const userFrame = (text: string) => ({
   type: "user" as const,
   message: { role: "user" as const, content: [{ type: "text", text }] },
