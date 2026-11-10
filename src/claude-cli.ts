@@ -595,6 +595,13 @@ function processEnvironment(
     CLAUDE_CODE_MAX_RETRIES: "0",
     DISABLE_AUTO_COMPACT: "1",
     DISABLE_COMPACT: "1",
+    // Pi owns compaction, so Claude Code must not refuse a request on its own
+    // estimate. Without this it answers "Prompt is too long" without calling
+    // the API once its chars/3 count of the replayed history reaches the window
+    // minus 23k (about 977k for 1M models). That count runs about 15% above
+    // Pi's, so it fires before Pi's 952k/984k compaction thresholds. The API
+    // still enforces the real limit, and Pi recovers from that error.
+    CLAUDE_CODE_BLOCKING_LIMIT_OVERRIDE: String(Number.MAX_SAFE_INTEGER),
     CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "off",
     DISABLE_ERROR_REPORTING: "1",
   });
